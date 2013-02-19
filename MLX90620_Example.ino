@@ -12,6 +12,7 @@
  You should replace all 64 values with the alpha_ij calculated using the values stored in your MLX90620's EEPROM. 
  I suggest you to make an EEPROM dump, print it on the Serial port and store it in a file. From there, 
  with the help of a spreadsheet (Libreoffice, Google Docs, Excel...) calculate your own alpha_ij values. 
+ 
  Please also pay attention to your emissivity value: since in my case it was equal to 1, to save SRAM i 
  cut out that piece of calculation. You need to restore those lines if your emissivity value is not equal to 1. 
  
@@ -34,32 +35,85 @@
 
 int refreshRate = 16; //Set this value to your desired refresh frequency
 
-int irData[64]; //Contains the most current IR temperature readings from the sensor
-float temperatures[64];
 
-int v_th;
-float to;
-
-//These variables are used 
-float Tambient;
+//Global variables
+//-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+int irData[64]; //Contains the raw IR data from the sensor
+float temperatures[64]; //Contains the calculated temperatures of each pixel in the array
+float Tambient; //Tracks the changing ambient temperature of the sensor
+byte eepromData[256]; //Contains the full EEPROM reading from the MLX (Slave 0x50)
 
 //These are constants calculated from the calibration data stored in EEPROM
 //See varInitialize and section 7.3 for more information
-int a_cp, b_cp, tgc, b_i_scale;
+int v_th, a_cp, b_cp, tgc, b_i_scale;
 float k_t1, k_t2, emissivity;
 int a_ij[64], b_ij[64];
 
+//These values are calculated using equation 7.3.3.2
+//They are constants and can be calculated using the MLX90620_alphaCalculator sketch
 float alpha_ij[64] = {
-  1.591E-8, 1.736E-8, 1.736E-8, 1.620E-8, 1.783E-8, 1.818E-8, 1.992E-8, 1.748E-8, 1.864E-8, 2.056E-8, 2.132E-8, 2.033E-8, 2.097E-8, 2.324E-8, 2.388E-8, 2.161E-8, 2.155E-8, 2.394E-8, 2.353E-8, 2.068E-8, 2.353E-8, 2.633E-8, 2.708E-8, 2.394E-8, 2.499E-8, 2.778E-8, 2.731E-8, 2.580E-8, 2.539E-8, 2.796E-8, 2.871E-8, 2.598E-8, 2.586E-8, 2.801E-8, 2.830E-8, 2.633E-8, 2.609E-8, 2.894E-8, 2.924E-8, 2.633E-8, 2.464E-8, 2.778E-8, 2.894E-8, 2.673E-8, 2.475E-8, 2.737E-8, 2.796E-8, 2.679E-8, 2.394E-8, 2.708E-8, 2.714E-8, 2.644E-8, 2.347E-8, 2.563E-8, 2.493E-8, 2.388E-8, 2.179E-8, 2.440E-8, 2.504E-8, 2.295E-8, 2.033E-8, 2.283E-8, 2.295E-8, 2.155E-8};  //<-- REPLACE THIS VALUES WITH YOUR OWN!
+  1.66583E-8, 1.85792E-8, 1.78807E-8, 1.57270E-8, 1.87538E-8, 2.05582E-8, 1.98597E-8, 1.81717E-8, 
+  2.05582E-8, 2.21880E-8, 2.27119E-8, 1.96269E-8, 2.27701E-8, 2.45745E-8, 2.45745E-8, 2.10239E-8, 
+  2.43417E-8, 2.62044E-8, 2.59715E-8, 2.31776E-8, 2.50402E-8, 2.77178E-8, 2.74267E-8, 2.46328E-8, 
+  2.57969E-8, 2.83580E-8, 2.76596E-8, 2.50984E-8, 2.60297E-8, 2.88237E-8, 2.86491E-8, 2.57387E-8, 
+  2.62044E-8, 2.86491E-8, 2.85909E-8, 2.50402E-8, 2.62626E-8, 2.90565E-8, 2.85909E-8, 2.50402E-8, 
+  2.55059E-8, 2.83580E-8, 2.78924E-8, 2.57387E-8, 2.52730E-8, 2.76596E-8, 2.74267E-8, 2.52730E-8, 
+  2.41089E-8, 2.62044E-8, 2.66700E-8, 2.45745E-8, 2.27701E-8, 2.57387E-8, 2.55059E-8, 2.31194E-8, 
+  2.12567E-8, 2.41089E-8, 2.41089E-8, 2.21880E-8, 1.92194E-8, 2.27119E-8, 2.21880E-8, 2.05582E-8, 
+};
 
 byte loopCount = 0; //Used in main loop
+//-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+
+//Begin Program code
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println("MLX90620 Example");
+
+  i2c_init(); //Init the I2C pins
+  PORTC = (1 << PORTC4) | (1 << PORTC5); //Enable pull-ups
+
+  delay(5); //Init procedure calls for a 5ms delay after power-on
+
+  read_EEPROM_MLX90620(); //Read the entire EEPROM
+
+  setConfiguration(refreshRate); //Configure the MLX sensor with the user's choice of refresh rate
+
+  calculate_TA(); //Calculate the current Tambient
+}
+
+void loop()
+{
+  if(loopCount++ == 16) //Tambient changes more slowly than the pixel readings. Update TA only every 16 loops.
+  { 
+    calculate_TA(); //Calculate the new Tambient
+
+    if(checkConfig_MLX90620()) //Every 16 readings check that the POR flag is not set
+    {
+      Serial.println("POR Detected!");
+      setConfiguration(refreshRate); //Re-write the configuration bytes to the MLX
+    }
+
+    loopCount = 0; //Reset count
+  }
+
+  readIR_MLX90620(); //Get the 64 bytes of raw pixel data into the irData array
+
+  calculate_TO(); //Run all the large calculations to get the temperature data for each pixel
+
+  printTemperatures(); //Send all 64 floats to serial port
+}
 
 //From the 256 bytes of EEPROM data, initialize 
 void varInitialization(byte calibration_data[])
 {
-  v_th = (calibration_data[VTH_H] << 8) + calibration_data[VTH_L];
-  k_t1 = ((calibration_data[KT1_H] << 8) + calibration_data[KT1_L]) / 1024.0; //2^10 = 1024
-  k_t2 = ((calibration_data[KT2_H] << 8) + calibration_data[KT2_L]) / 1048576.0; //2^20 = 1,048,576
+  v_th = 256 * calibration_data[VTH_H] + calibration_data[VTH_L];
+  k_t1 = (256 * calibration_data[KT1_H] + calibration_data[KT1_L]) / 1024.0; //2^10 = 1024
+  k_t2 = (256 * calibration_data[KT2_H] + calibration_data[KT2_L]) / 1048576.0; //2^20 = 1,048,576
+  emissivity = (256 * calibration_data[CAL_EMIS_H] + calibration_data[CAL_EMIS_L]) / 32768.0;
 
   a_cp = calibration_data[CAL_ACP];
   if(a_cp > 127) a_cp -= 256; //These values are stored as 2's compliment. This coverts it if necessary.
@@ -72,8 +126,6 @@ void varInitialization(byte calibration_data[])
 
   b_i_scale = calibration_data[CAL_BI_SCALE];
 
-  emissivity = (((unsigned int)calibration_data[CAL_EMIS_H] << 8) + calibration_data[CAL_EMIS_L]) / 32768.0;
-
   for(int i = 0 ; i < 64 ; i++)
   {
     //Read the individual pixel offsets
@@ -84,6 +136,7 @@ void varInitialization(byte calibration_data[])
     b_ij[i] = calibration_data[0x40 + i]; //Bi(i,j) begins 64 bytes into EEPROM at 0x40
     if(b_ij[i] > 127) b_ij[i] -= 256;
   }
+  
 }
 
 //Receives the refresh rate for sensor scanning
@@ -136,8 +189,6 @@ void setConfiguration(int irRefreshRateHZ)
 //Note: The EEPROM on the MLX has a different I2C address from the MLX. I've never seen this before.
 void read_EEPROM_MLX90620()
 {
-  byte eepromData[256];
-
   i2c_start_wait(MLX90620_EEPROM_WRITE);
   i2c_write(0x00); //EEPROM info starts at location 0x00
   i2c_rep_start(MLX90620_EEPROM_READ);
@@ -148,7 +199,7 @@ void read_EEPROM_MLX90620()
 
   i2c_stop(); //We're done talking
 
-  varInitialization(eepromData); //Calculate a bunch on constants from the EEPROM data
+  varInitialization(eepromData); //Calculate a bunch of constants from the EEPROM data
 
   writeTrimmingValue(eepromData[OSC_TRIM_VALUE]);
 }
@@ -168,6 +219,7 @@ void writeTrimmingValue(byte val)
 //Gets the latest PTAT (package temperature ambient) reading from the MLX
 //Then calculates a new Tambient
 //Many of these values (k_t1, v_th, etc) come from varInitialization and EEPROM reading
+//This has been tested to match example 7.3.2
 void calculate_TA(void)
 {
   unsigned int ptat = readPTAT_MLX90620();
@@ -177,7 +229,7 @@ void calculate_TA(void)
 
 //Reads the PTAT data from the MLX
 //Returns an unsigned int containing the PTAT
-unsigned int readPTAT_MLX90620()
+int readPTAT_MLX90620()
 {
   i2c_start_wait(MLX90620_WRITE);
   i2c_write(CMD_READ_REGISTER); //Command = read PTAT
@@ -190,8 +242,8 @@ unsigned int readPTAT_MLX90620()
   byte ptatHigh = i2c_readAck();
 
   i2c_stop();
-
-  return( (unsigned int)(ptatHigh << 8) | ptatLow); //Combine bytes and return
+  
+  return( (int)(ptatHigh << 8) | ptatLow); //Combine bytes and return
 }
 
 //Calculate the temperatures seen for each pixel
@@ -201,7 +253,7 @@ void calculate_TO()
 {
   float v_ir_off_comp;
   float v_ir_tgc_comp;
-  //float v_ir_comp; //Removed to save SRAM, in my case v_ir_comp == v_ir_tgc_comp
+  float v_ir_comp;
 
   //Calculate the offset compensation for the one compensation pixel
   //This is a constant in the TO calculation, so calculate it here.
@@ -214,10 +266,9 @@ void calculate_TO()
 
     v_ir_tgc_comp = v_ir_off_comp - ( ((float)tgc/32) * v_cp_off_comp); //#2: Calculate Thermal Gradien Compensation (TGC)
 
-    //v_ir_comp = v_ir_tgc_comp / emissivity; //#3: Calculate Emissivity Compensation - Removed to save SRAM, since emissivity in my case is equal to 1. 
+    v_ir_comp = v_ir_tgc_comp / emissivity; //#3: Calculate Emissivity Compensation
 
-    //temperatures[i] = sqrt(sqrt((v_ir_comp/alpha_ij[i]) + pow((Tambient + 273.15), 4))) - 273.15;
-    temperatures[i] = sqrt(sqrt((v_ir_tgc_comp/alpha_ij[i]) + pow((Tambient + 273.15), 4))) - 273.15;	//#4: Calculated TO - Edited to work with v_ir_tgc_comp instead of v_ir_comp
+    temperatures[i] = sqrt( sqrt( (v_ir_comp/alpha_ij[i]) + pow(Tambient + 273.15, 4) )) - 273.15;
   }
 }
 
@@ -279,7 +330,6 @@ unsigned int readConfig_MLX90620()
   return( (unsigned int)(configHigh << 8) | configLow); //Combine the configuration bytes and return as one unsigned int
 }
 
-
 //Poll the MLX for its current status
 //Returns true if the POR/Brown out bit is set
 boolean checkConfig_MLX90620()
@@ -298,42 +348,3 @@ void printTemperatures()
     Serial.println(temperatures[i]);
   }
 }
-
-void setup()
-{
-  Serial.begin(115200);
-  Serial.println("MLX90620 Example");
-
-  i2c_init(); //Init the I2C pins
-  PORTC = (1 << PORTC4) | (1 << PORTC5); //Enable pull-ups
-
-  delay(5); //Init procedure calls for a 5ms delay after power-on
-
-  read_EEPROM_MLX90620(); //Read the entire EEPROM
-
-  setConfiguration(refreshRate); //Configure the MLX sensor with the user's choice of refresh rate
-}
-
-void loop()
-{
-  if(loopCount++ == 16)
-  { //Tambient changes more slowly than the pixel readings. Update TA only every 16 loops.
-    calculate_TA(); //Calculate the new Tambient
-
-    if(checkConfig_MLX90620()) //Every 16 readings check that the POR flag is not set
-    {
-      Serial.println("POR Detected!");
-      setConfiguration(refreshRate); //Re-write the configuration bytes to the MLX
-    }
-
-    loopCount = 0; //Reset count
-  }
-
-  readIR_MLX90620(); //Get the 64 bytes of raw pixel data into the irData array
-  
-  calculate_TO(); //Run all the large calculations to get the temperature data for each pixel
-  
-  printTemperatures(); //Send all 64 floats to serial port
-}
-
-
