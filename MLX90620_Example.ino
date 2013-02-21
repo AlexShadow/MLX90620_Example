@@ -8,13 +8,9 @@
  
  This example shows how to read and calculate the 64 temperatures for the 64 pixels of the MLX90620 thermopile sensor.
  
- Attention! I commented out the alpha_ij array, so if you're going to compile the sketch you'll get for sure an error.
- You should replace all 64 values with the alpha_ij calculated using the values stored in your MLX90620's EEPROM. 
- I suggest you to make an EEPROM dump, print it on the Serial port and store it in a file. From there, 
- with the help of a spreadsheet (Libreoffice, Google Docs, Excel...) calculate your own alpha_ij values. 
- 
- Please also pay attention to your emissivity value: since in my case it was equal to 1, to save SRAM i 
- cut out that piece of calculation. You need to restore those lines if your emissivity value is not equal to 1. 
+ alpha_ij array is specific to every sensor and needs to be calculated separately. Please see the 
+ 'MLX90620_alphaCalculator' sketch to get these values. If you choose not to calculate these values
+ this sketch will still work but the temperatures shown will be very inaccurate.
  
  Don't get confused by the bottom view of the device! The GND pin is connected to the housing.
  
