@@ -25,7 +25,7 @@
  GND to VSS
  
  I used the internal pull-ups on the SDA/SCL lines. Normally you should use ~4.7k pull-ups for I2C.
- 
+
  */
 
 #include <i2cmaster.h>
@@ -104,7 +104,8 @@ void loop()
 
   calculate_TO(); //Run all the large calculations to get the temperature data for each pixel
 
-  printTemperatures(); //Send all 64 floats to serial port
+  prettyPrintTemperatures(); //Print the array in a 4 x 16 pattern
+  //rawPrintTemperatures(); //Print the entire array so it can more easily be read by Processing app
 }
 
 //From the 256 bytes of EEPROM data, initialize 
@@ -113,8 +114,8 @@ void varInitialization(byte calibration_data[])
   v_th = 256 * calibration_data[VTH_H] + calibration_data[VTH_L];
   k_t1 = (256 * calibration_data[KT1_H] + calibration_data[KT1_L]) / 1024.0; //2^10 = 1024
   k_t2 = (256 * calibration_data[KT2_H] + calibration_data[KT2_L]) / 1048576.0; //2^20 = 1,048,576
-  emissivity = (256 * calibration_data[CAL_EMIS_H] + calibration_data[CAL_EMIS_L]) / 32768.0;
-
+  emissivity = ((unsigned int)256 * calibration_data[CAL_EMIS_H] + calibration_data[CAL_EMIS_L]) / 32768.0;
+  
   a_cp = calibration_data[CAL_ACP];
   if(a_cp > 127) a_cp -= 256; //These values are stored as 2's compliment. This coverts it if necessary.
 
@@ -229,7 +230,7 @@ void calculate_TA(void)
 
 //Reads the PTAT data from the MLX
 //Returns an unsigned int containing the PTAT
-int readPTAT_MLX90620()
+unsigned int readPTAT_MLX90620()
 {
   i2c_start_wait(MLX90620_WRITE);
   i2c_write(CMD_READ_REGISTER); //Command = read PTAT
@@ -243,7 +244,7 @@ int readPTAT_MLX90620()
 
   i2c_stop();
   
-  return( (int)(ptatHigh << 8) | ptatLow); //Combine bytes and return
+  return( (unsigned int)(ptatHigh << 8) | ptatLow); //Combine bytes and return
 }
 
 //Calculate the temperatures seen for each pixel
@@ -340,11 +341,36 @@ boolean checkConfig_MLX90620()
     return false;
 }
 
-//Prints the temperatures array in a single 64 byte block
-void printTemperatures()
+//Prints the temperatures in a way that's more easily viewable in the terminal window
+void prettyPrintTemperatures()
 {
+  Serial.println();
   for(int i = 0 ; i < 64 ; i++)
   {
-    Serial.println(temperatures[i]);
+    if(i % 16 == 0) Serial.println();
+    Serial.print(convertToFahrenheit(temperatures[i]));
+    //Serial.print(irData[i]);
+    Serial.print(", ");
   }
+}
+
+//Prints the temperatures in a way that's more easily parsed by a Processing app
+//Each line starts with '$' and ends with '*'
+void rawPrintTemperatures()
+{
+  Serial.print("$");
+  for(int i = 0 ; i < 64 ; i++)
+  {
+    Serial.print(convertToFahrenheit(temperatures[i]));
+    Serial.print(","); //Don't print comma on last temperature
+  }
+  Serial.println("*");
+}
+
+//Given a Celsius float, converts to Fahrenheit
+float convertToFahrenheit (float Tc)
+{
+  float Tf = (9/5) * Tc + 32;
+
+  return(Tf);
 }
